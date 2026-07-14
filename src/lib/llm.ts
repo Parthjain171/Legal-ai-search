@@ -9,6 +9,38 @@ function getGeminiClient(): GoogleGenerativeAI {
   return new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 }
 
+// retry wrapper for Gemini API calls (handles 503 high-demand errors)
+async function generateWithRetry(
+  model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
+  request: Parameters<ReturnType<GoogleGenerativeAI["getGenerativeModel"]>["generateContent"]>[0],
+  maxRetries: number = 3
+): Promise<ReturnType<ReturnType<GoogleGenerativeAI["getGenerativeModel"]>["generateContent"]>> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await model.generateContent(request);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isRetryable =
+        errorMessage.includes("503") ||
+        errorMessage.includes("Service Unavailable") ||
+        errorMessage.includes("high demand") ||
+        errorMessage.includes("UNAVAILABLE") ||
+        errorMessage.includes("overloaded");
+
+      if (isRetryable && attempt < maxRetries) {
+        const waitTime = Math.min(5000 * Math.pow(2, attempt), 30000);
+        console.warn(
+          `Gemini API attempt ${attempt + 1} failed (${errorMessage}), retrying in ${waitTime / 1000}s...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Max retries exceeded for Gemini API");
+}
+
 export interface AnswerWithCitations {
   answer: string;
   citations: Citation[];
@@ -104,16 +136,30 @@ Provide a thorough, well-cited answer. Reference specific documents and page num
     systemInstruction: systemPrompt,
   });
 
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 2000,
-    },
-  });
-
-  const answer =
-    result.response.text() || "Unable to generate an answer.";
+  let answer: string;
+  try {
+    const result = await generateWithRetry(model, {
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 2000,
+      },
+    });
+    answer = result.response.text() || "Unable to generate an answer.";
+  } catch {
+    // if all retries fail, return a context-based fallback answer
+    answer =
+      "The AI model is temporarily unavailable due to high demand. " +
+      "However, the search results above contain relevant information from the following sources:\n\n" +
+      searchResults
+        .slice(0, 5)
+        .map(
+          (r, i) =>
+            `${i + 1}. "${r.chunk.docTitle}" (Page ${r.chunk.pageNumber}): ${r.chunk.content.slice(0, 150)}...`
+        )
+        .join("\n\n") +
+      "\n\nPlease try again in a few moments for a full AI-generated answer.";
+  }
 
   // rough confidence from search scores
   const avgScore =
@@ -187,15 +233,22 @@ Provide:
     systemInstruction: systemPrompt,
   });
 
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 2000,
-    },
-  });
-
-  const content = result.response.text() || "";
+  let content: string;
+  try {
+    const result = await generateWithRetry(model, {
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 2000,
+      },
+    });
+    content = result.response.text() || "";
+  } catch {
+    content =
+      "The AI model is temporarily unavailable due to high demand. " +
+      "The document content has been retrieved but cannot be summarized at this time. " +
+      "Please try again in a few moments.";
+  }
 
   // extract key points
   const keyPointsMatch = content.match(
