@@ -23,15 +23,43 @@ let embeddingCache: EmbeddedChunk[] | null = null;
 let isBuilding = false;
 let buildPromise: Promise<void> | null = null;
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries: number = 3
+): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, options);
+
+    if (response.status === 429 && attempt < maxRetries) {
+      // rate limited, wait and retry
+      const waitTime = Math.min(15000 * (attempt + 1), 60000);
+      await delay(waitTime);
+      continue;
+    }
+
+    return response;
+  }
+
+  throw new Error("Max retries exceeded");
+}
+
 async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(`${EMBED_API}:embedContent?key=${getApiKey()}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "models/gemini-embedding-001",
-      content: { parts: [{ text: text.slice(0, 8000) }] },
-    }),
-  });
+  const response = await fetchWithRetry(
+    `${EMBED_API}:embedContent?key=${getApiKey()}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "models/gemini-embedding-001",
+        content: { parts: [{ text: text.slice(0, 8000) }] },
+      }),
+    }
+  );
 
   if (!response.ok) {
     const err = await response.text();
@@ -45,14 +73,14 @@ async function generateEmbedding(text: string): Promise<number[]> {
 async function generateEmbeddingsBatch(
   texts: string[]
 ): Promise<number[][]> {
-  // batch in groups of 100
-  const batchSize = 100;
+  // small batches to stay under free tier rate limit (100 req/min)
+  const batchSize = 25;
   const allEmbeddings: number[][] = [];
 
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize).map((t) => t.slice(0, 8000));
 
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `${EMBED_API}:batchEmbedContents?key=${getApiKey()}`,
       {
         method: "POST",
@@ -73,6 +101,11 @@ async function generateEmbeddingsBatch(
 
     const data = await response.json();
     allEmbeddings.push(...data.embeddings.map((e: { values: number[] }) => e.values));
+
+    // pause between batches to respect rate limit
+    if (i + batchSize < texts.length) {
+      await delay(15000);
+    }
   }
 
   return allEmbeddings;
