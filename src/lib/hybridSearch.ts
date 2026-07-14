@@ -103,15 +103,28 @@ export async function hybridSearch(
   const fetchCount = topK * 3; // overfetch for better fusion
 
   if (mode === "vector") {
-    const vectorResults = await vectorSearch(query, topK, categoryFilter);
-    return vectorResults.map((r, i) => ({
-      chunk: r.chunk,
-      hybridScore: r.score,
-      vectorScore: r.score,
-      bm25Score: 0,
-      vectorRank: i + 1,
-      bm25Rank: 0,
-    }));
+    try {
+      const vectorResults = await vectorSearch(query, topK, categoryFilter);
+      return vectorResults.map((r, i) => ({
+        chunk: r.chunk,
+        hybridScore: r.score,
+        vectorScore: r.score,
+        bm25Score: 0,
+        vectorRank: i + 1,
+        bm25Rank: 0,
+      }));
+    } catch {
+      // fall back to BM25 if vector search fails
+      const bm25Results = bm25Search(query, topK, categoryFilter);
+      return bm25Results.map((r, i) => ({
+        chunk: r.chunk,
+        hybridScore: r.score,
+        bm25Score: r.score,
+        vectorScore: 0,
+        vectorRank: 0,
+        bm25Rank: i + 1,
+      }));
+    }
   }
 
   if (mode === "keyword") {
@@ -126,11 +139,24 @@ export async function hybridSearch(
     }));
   }
 
-  // hybrid: combine via RRF
-  const [vectorResults, bm25Results] = await Promise.all([
-    vectorSearch(query, fetchCount, categoryFilter),
-    Promise.resolve(bm25Search(query, fetchCount, categoryFilter)),
-  ]);
+  // hybrid: combine via RRF (falls back to BM25-only if vector search fails)
+  const bm25Results = bm25Search(query, fetchCount, categoryFilter);
+
+  let vectorResults: VectorSearchResult[] = [];
+  try {
+    vectorResults = await vectorSearch(query, fetchCount, categoryFilter);
+  } catch {
+    // vector search failed (rate limit, timeout, etc.), use BM25 only
+    console.warn("Vector search unavailable, falling back to BM25-only");
+    return bm25Results.slice(0, topK).map((r, i) => ({
+      chunk: r.chunk,
+      hybridScore: r.score,
+      bm25Score: r.score,
+      vectorScore: 0,
+      vectorRank: 0,
+      bm25Rank: i + 1,
+    }));
+  }
 
   const fused = reciprocalRankFusion(vectorResults, bm25Results);
   return fused.slice(0, topK);
