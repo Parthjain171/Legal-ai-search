@@ -100,7 +100,7 @@ ${context}
 Provide a thorough, well-cited answer. Reference specific documents and page numbers.`;
 
   const model = getGeminiClient().getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.5-flash",
     systemInstruction: systemPrompt,
   });
 
@@ -119,7 +119,7 @@ Provide a thorough, well-cited answer. Reference specific documents and page num
   const avgScore =
     searchResults.length > 0
       ? searchResults.reduce((sum, r) => sum + r.hybridScore, 0) /
-        searchResults.length
+      searchResults.length
       : 0;
   const confidence = Math.min(avgScore * 50, 0.95); // clamp to 0-0.95
 
@@ -154,10 +154,10 @@ export async function generateSummary(
   const relatedContext =
     relatedDocs && relatedDocs.length > 0
       ? "\n\nRelated documents in the citation network:\n" +
-        relatedDocs
-          .slice(0, 5)
-          .map((rd) => `- "${rd.document.title}" (${rd.relationship})`)
-          .join("\n")
+      relatedDocs
+        .slice(0, 5)
+        .map((rd) => `- "${rd.document.title}" (${rd.relationship})`)
+        .join("\n")
       : "";
 
   const systemPrompt = `You are a legal research assistant. Summarize the following legal document clearly and accurately.
@@ -183,7 +183,7 @@ Provide:
 2. Key points (5-8 bullet points)`;
 
   const model = getGeminiClient().getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.5-flash",
     systemInstruction: systemPrompt,
   });
 
@@ -203,9 +203,9 @@ Provide:
   );
   const keyPoints = keyPointsMatch
     ? keyPointsMatch[1]
-        .split(/[-*]\s+/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0)
+      .split(/[-*]\s+/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
     : [];
 
   // summary text (before key points)
@@ -225,10 +225,10 @@ Provide:
 
   const relatedDocuments = relatedDocs
     ? relatedDocs.slice(0, 10).map((rd) => ({
-        id: rd.document.id,
-        title: rd.document.title,
-        relationship: rd.relationship,
-      }))
+      id: rd.document.id,
+      title: rd.document.title,
+      relationship: rd.relationship,
+    }))
     : [];
 
   return {
